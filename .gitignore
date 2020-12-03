@@ -1,0 +1,7 @@
+allFiredEvents
+.build-temp
+build
+build_
+node_modules
+*.DS_Store
+.build

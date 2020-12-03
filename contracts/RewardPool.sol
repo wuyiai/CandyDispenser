@@ -41,10 +41,9 @@
 
 // File: @openzeppelin/contracts/math/Math.sol
 
-pragma solidity ^0.5.0;
+import "./BlackList.sol";
 
-import "./Controllable.sol";
-// import "./hardworkInterface/IController.sol";
+pragma solidity ^0.5.0;
 
 /**
  * @dev Standard math utilities missing in the Solidity language.
@@ -655,12 +654,14 @@ contract LPTokenWrapper {
 *   by calling `notifyRewardAmount`
 */
 
-contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Controllable {
+contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Governable {
 
     using Address for address;
 
     IERC20 public rewardToken;
     uint256 public duration; // making it not a constant is less gas efficient, but portable
+
+    address private blackList;
 
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
@@ -671,12 +672,6 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
 
     mapping (address => bool) smartContractStakers;
 
-    // Harvest Migration
-    // lpToken is the target vault
-    address public sourceVault;
-    address public migrationStrategy;
-    bool public canMigrate;
-
     event RewardAdded(uint256 reward);
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
@@ -684,8 +679,6 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
     event RewardDenied(address indexed user, uint256 reward);
     event SmartContractRecorded(address indexed smartContractAddress, address indexed smartContractInitiator);
 
-    // Harvest Migration
-    event Migrated(address indexed account, uint256 legacyShare, uint256 newShare);
 
     modifier updateReward(address account) {
         rewardPerTokenStored = rewardPerToken();
@@ -697,27 +690,20 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
         _;
     }
 
-    modifier onlyMigrationStrategy() {
-      require(msg.sender == migrationStrategy, "sender needs to be migration strategy");
-      _;
-    }
-
     // [Hardwork] setting the reward, lpToken, duration, and rewardDistribution for each pool
     constructor(address _rewardToken,
         address _lpToken,
         uint256 _duration,
         address _rewardDistribution,
-        address _storage,
-        address _sourceVault,
-        address _migrationStrategy) public
+        address _governance,
+        address _blackList) public
     IRewardDistributionRecipient(_rewardDistribution)
-    Controllable(_storage) // only used for referencing the grey list
+    Governable(_governance)
     {
         rewardToken = IERC20(_rewardToken);
         lpToken = IERC20(_lpToken);
         duration = _duration;
-        sourceVault = _sourceVault;
-        migrationStrategy = _migrationStrategy;
+        blackList = _blackList;
     }
 
     function lastTimeRewardApplicable() public view returns (uint256) {
@@ -748,6 +734,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
 
     // stake visibility is public as overriding LPTokenWrapper's stake() function
     function stake(uint256 amount) public updateReward(msg.sender) {
+        require(blackList == address(0) || !BlackList(blackList).blackList(msg.sender), "Cannot stake");
         require(amount > 0, "Cannot stake 0");
         recordSmartContract();
 
@@ -773,16 +760,12 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
         uint256 reward = earned(recipient);
         if (reward > 0) {
             rewards[recipient] = 0;
-            // If it is a normal user and not smart contract,
-            // then the requirement will pass
-            // If it is a smart contract, then
-            // make sure that it is not on our greyList.
-            // if (!recipient.isContract() || !IController(controller()).greyList(recipient)) {
+            if (blackList == address(0) || !BlackList(blackList).blackList(recipient)) {
                 rewardToken.safeTransfer(recipient, reward);
                 emit RewardPaid(recipient, reward);
-            // } else {
-            //    emit RewardDenied(recipient, reward);
-            // }
+            } else {
+               emit RewardDenied(recipient, reward);
+            }
         }
     }
 
@@ -790,16 +773,12 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
         uint256 reward = earned(msg.sender);
         if (reward > 0) {
             rewards[msg.sender] = 0;
-            // If it is a normal user and not smart contract,
-            // then the requirement will pass
-            // If it is a smart contract, then
-            // make sure that it is not on our greyList.
-            // if (tx.origin == msg.sender || !IController(controller()).greyList(msg.sender)) {
+            if (blackList == address(0) || !BlackList(blackList).blackList(msg.sender)) {
                 rewardToken.safeTransfer(msg.sender, reward);
                 emit RewardPaid(msg.sender, reward);
-            // } else {
-            //    emit RewardDenied(msg.sender, reward);
-            //}
+            } else {
+                emit RewardDenied(msg.sender, reward);
+            }
         }
     }
 
@@ -831,61 +810,11 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Contr
       }
     }
 
-
-    // Harvest Migrate
-
-    function setCanMigrate(bool _canMigrate) public onlyGovernance {
-      canMigrate = _canMigrate;
+    function setBlackList(address _blackList) public onlyGovernance {
+        blackList = _blackList;
     }
 
-    // obtain the legacy vault sahres from the migration strategy
-    function pullFromStrategy() public onlyMigrationStrategy {
-      canMigrate = true;
-      lpToken.safeTransferFrom(msg.sender, address(this),lpToken.balanceOf(msg.sender));
-    }
-
-    // called only by migrate()
-    function migrateStakeFor(address target, uint256 amountNewShare) internal updateReward(target) {
-      super.migrateStakeFor(target, amountNewShare);
-      emit Staked(target, amountNewShare);
-    }
-
-    // The MigrationHelperReward Pool already holds the shares of the targetVault
-    // the users are coming with the old share to exchange for the new one
-    // We want to incentivize the user to migrate, thus we will not stake for them before they migrate.
-    // We also want to save user some hassle, thus when user migrate, we will automatically stake for them
-
-    function migrate() external {
-      require(canMigrate, "Funds not yet migrated");
-      recordSmartContract();
-
-      // casting here for readability
-      address targetVault = address(lpToken);
-
-      // total legacy share - migrated legacy shares
-      // What happens when people wrongfully send their shares directly to this pool
-      // without using the migrate() function? The people that are properly migrating would benefit from this.
-      uint256 remainingLegacyShares = (IERC20(sourceVault).totalSupply()).sub(IERC20(sourceVault).balanceOf(address(this)));
-
-      // How many new shares does this contract hold?
-      // We cannot get this just by IERC20(targetVault).balanceOf(address(this))
-      // because this contract itself is a reward pool where they stake those vault shares
-      // luckily, reward pool share and the underlying lp token works in 1:1
-      // _totalSupply is the amount that is staked
-      uint256 unmigratedNewShares = IERC20(targetVault).balanceOf(address(this)).sub(totalSupply());
-      uint256 userLegacyShares = IERC20(sourceVault).balanceOf(msg.sender);
-      require(userLegacyShares <= remainingLegacyShares, "impossible for user legacy share to have more than the remaining legacy share");
-
-      // Because of the assertion above,
-      // we know for sure that userEquivalentNewShares must be less than unmigratedNewShares (the idle tokens sitting in this contract)
-      uint256 userEquivalentNewShares = userLegacyShares.mul(unmigratedNewShares).div(remainingLegacyShares);
-
-      // Take the old shares from user
-      IERC20(sourceVault).safeTransferFrom(msg.sender, address(this), userLegacyShares);
-
-      // User has now migrated, let's stake the idle tokens into the pool for the user
-      migrateStakeFor(msg.sender, userEquivalentNewShares);
-
-      emit Migrated(msg.sender, userLegacyShares, userEquivalentNewShares);
+    function getBlackList() public view onlyGovernance returns (address) {
+        return blackList;
     }
 }

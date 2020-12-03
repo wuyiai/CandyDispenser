@@ -1,27 +1,26 @@
 pragma solidity 0.5.16;
 
-import "./Storage.sol";
-
 contract Governable {
 
-  Storage public store;
+  address public governance;
 
-  constructor(address _store) public {
-    require(_store != address(0), "new storage shouldn't be empty");
-    store = Storage(_store);
+  constructor(address _governance) public {
+    require(_governance != address(0), "governance shouldn't be empty");
+    governance = _governance;
   }
 
   modifier onlyGovernance() {
-    require(store.isGovernance(msg.sender), "Not governance");
+    require(isGovernance(msg.sender), "Not governance");
     _;
   }
 
-  function setStorage(address _store) public onlyGovernance {
-    require(_store != address(0), "new storage shouldn't be empty");
-    store = Storage(_store);
+  function setGovernance(address _governance) public onlyGovernance {
+    require(_governance != address(0), "new governance shouldn't be empty");
+    governance = _governance;
   }
 
-  function governance() public view returns (address) {
-    return store.governance();
+
+  function isGovernance(address account) public view returns (bool) {
+    return account == governance;
   }
 }
