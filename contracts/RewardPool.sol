@@ -658,6 +658,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     using Address for address;
 
+    string public name;
     IERC20 public rewardToken;
     uint256 public duration; // making it not a constant is less gas efficient, but portable
 
@@ -679,6 +680,12 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     event RewardDenied(address indexed user, uint256 reward);
     event SmartContractRecorded(address indexed smartContractAddress, address indexed smartContractInitiator);
 
+    struct WithDrawEntity {
+        uint256 amount;
+        uint256 time;
+    }
+
+    mapping (address => WithDrawEntity) withdrawApplications;
 
     modifier updateReward(address account) {
         rewardPerTokenStored = rewardPerToken();
@@ -690,8 +697,16 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         _;
     }
 
+    modifier onlyApplied(address account, uint256 amount) {
+        require(withdrawApplications[msg.sender].amount > 0 && withdrawApplications[msg.sender].time > 0, "not applied!");
+        require(withdrawApplications[msg.sender].amount >= amount, "apply amount is smaller than withdraw amount!");
+        require(block.timestamp >= withdrawApplications[msg.sender].time + 60 * 60 * 72, "It's not time to redeem");
+        _;
+    }
+
     // [Hardwork] setting the reward, lpToken, duration, and rewardDistribution for each pool
-    constructor(address _rewardToken,
+    constructor(string memory _name,
+        address _rewardToken,
         address _lpToken,
         uint256 _duration,
         address _rewardDistribution,
@@ -700,6 +715,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     IRewardDistributionRecipient(_rewardDistribution)
     Governable(_governance)
     {
+        name = _name;
         rewardToken = IERC20(_rewardToken);
         lpToken = IERC20(_lpToken);
         duration = _duration;
@@ -742,15 +758,22 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         emit Staked(msg.sender, amount);
     }
 
-    function withdraw(uint256 amount) public updateReward(msg.sender) {
+    function withdraw(uint256 amount) public updateReward(msg.sender) onlyApplied(msg.sender, amount) {
         require(amount > 0, "Cannot withdraw 0");
         super.withdraw(amount);
         emit Withdrawn(msg.sender, amount);
+        withdrawApplications[msg.sender].amount = 0;
+        withdrawApplications[msg.sender].time = 0;
     }
 
     function exit() external {
         withdraw(balanceOf(msg.sender));
         getReward();
+    }
+
+    function withdrawApplication(uint256 amount) public updateReward(msg.sender) {
+        withdrawApplications[msg.sender].amount = amount;
+        withdrawApplications[msg.sender].time = block.timestamp;
     }
 
     /// A push mechanism for accounts that have not claimed their rewards for a long time.
