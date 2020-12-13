@@ -771,7 +771,8 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         getReward();
     }
 
-    function withdrawApplication(uint256 amount) public updateReward(msg.sender) {
+    function withdrawApplication(uint256 amount) external updateReward(msg.sender) {
+        require(amount <= balanceOf(msg.sender), "apply amount is greater than the account balance!");
         withdrawApplications[msg.sender].amount = amount;
         withdrawApplications[msg.sender].time = block.timestamp;
     }
@@ -833,11 +834,11 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
       }
     }
 
-    function setBlackList(address _blackList) public onlyGovernance {
+    function setBlackList(address _blackList) external onlyGovernance {
         blackList = _blackList;
     }
 
-    function getBlackList() public view onlyGovernance returns (address) {
+    function getBlackList() external view onlyGovernance returns (address) {
         return blackList;
     }
 }
