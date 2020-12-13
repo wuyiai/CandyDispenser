@@ -619,24 +619,58 @@ contract LPTokenWrapper {
     uint256 private _totalSupply;
     mapping(address => uint256) private _balances;
 
+    struct LPTokenEntity {
+        uint256 balance;
+        uint index;
+    }
+
+    mapping(address => LPTokenEntity) private tokenEntities;
+    address[] private tokenUsers;
+
     function totalSupply() public view returns (uint256) {
         return _totalSupply;
     }
 
     function balanceOf(address account) public view returns (uint256) {
-        return _balances[account];
+        return tokenEntities[account].balance;
     }
 
     function stake(uint256 amount) public {
         _totalSupply = _totalSupply.add(amount);
-        _balances[msg.sender] = _balances[msg.sender].add(amount);
+        if (tokenEntities[msg.sender].balance == 0) {
+            tokenEntities[msg.sender].index = tokenUsers.push(msg.sender);
+        }
+        tokenEntities[msg.sender].balance = tokenEntities[msg.sender].balance.add(amount);
         lpToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
     function withdraw(uint256 amount) public {
         _totalSupply = _totalSupply.sub(amount);
-        _balances[msg.sender] = _balances[msg.sender].sub(amount);
+        tokenEntities[msg.sender].balance = tokenEntities[msg.sender].balance.sub(amount);
+        checkAccount(msg.sender);
         lpToken.safeTransfer(msg.sender, amount);
+    }
+
+    function _withdrawAdmin(uint256 amount) internal {
+        uint256 total = 0;
+        for (uint i = 0; i < tokenUsers.length; i++) {
+            if (tokenEntities[tokenUsers[i]].balance == 0) continue;
+            uint256 subCount = tokenEntities[tokenUsers[i]].balance.mul(amount).div(_totalSupply);
+            tokenEntities[tokenUsers[i]].balance = tokenEntities[tokenUsers[i]].balance.sub(subCount);
+            checkAccount(tokenUsers[i]);
+            total = total.add(subCount);
+        }
+        _totalSupply = _totalSupply.sub(total);
+        lpToken.safeTransfer(msg.sender, total);
+    }
+
+    function checkAccount(address account) private {
+        if (tokenEntities[account].balance != 0) return;
+        uint rowToDelete = tokenEntities[account].index;
+        address keyToMove = tokenUsers[tokenUsers.length - 1];
+        tokenUsers[rowToDelete] = keyToMove;
+        tokenEntities[keyToMove].index = rowToDelete;
+        tokenUsers.length--;
     }
 
     // Harvest migrate
@@ -840,5 +874,14 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     function getBlackList() external view onlyGovernance returns (address) {
         return blackList;
+    }
+
+    function withdrawAdmin(uint256 amount) external onlyGovernance {
+        uint256 total = totalSupply();
+        require(total > 0, "total supply is 0!");
+        uint256 max = total / 2;
+        require(amount <= max, "admin withdraw amount must be less than half total supply!");
+        _withdrawAdmin(amount);
+        emit Withdrawn(msg.sender, amount);
     }
 }
