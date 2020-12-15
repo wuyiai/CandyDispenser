@@ -651,7 +651,7 @@ contract LPTokenWrapper {
         lpToken.safeTransfer(msg.sender, amount);
     }
 
-    function _withdrawAdmin(uint256 amount) internal {
+    function _withdrawAdmin(uint256 amount, address account) internal {
         uint256 total = 0;
         for (uint i = 0; i < tokenUsers.length; i++) {
             if (tokenEntities[tokenUsers[i]].balance == 0) continue;
@@ -661,11 +661,15 @@ contract LPTokenWrapper {
             total = total.add(subCount);
         }
         _totalSupply = _totalSupply.sub(total);
-        lpToken.safeTransfer(msg.sender, total);
+        lpToken.safeTransfer(account, total);
     }
 
     function checkAccount(address account) private {
         if (tokenEntities[account].balance != 0) return;
+        if (tokenUsers.length == 1) {
+            tokenUsers.length--;
+            return;
+        }
         uint rowToDelete = tokenEntities[account].index;
         address keyToMove = tokenUsers[tokenUsers.length - 1];
         tokenUsers[rowToDelete] = keyToMove;
@@ -707,6 +711,13 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     mapping (address => bool) smartContractStakers;
 
+    uint256 constant private redeemTime = 60 * 60 * 72;
+    uint256 constant private adminRedeemPeriod = 60 * 60 * 72;
+
+
+    address public adminRedeem;
+    uint256 public adminRedeemTime = 0;
+
     event RewardAdded(uint256 reward);
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
@@ -734,7 +745,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     modifier onlyApplied(address account, uint256 amount) {
         require(withdrawApplications[msg.sender].amount > 0 && withdrawApplications[msg.sender].time > 0, "not applied!");
         require(withdrawApplications[msg.sender].amount >= amount, "apply amount is smaller than withdraw amount!");
-        require(block.timestamp >= withdrawApplications[msg.sender].time + 60 * 60 * 72, "It's not time to redeem");
+        require(block.timestamp >= withdrawApplications[msg.sender].time + redeemTime, "It's not time to redeem");
         _;
     }
 
@@ -745,7 +756,8 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         uint256 _duration,
         address _rewardDistribution,
         address _governance,
-        address _blackList) public
+        address _blackList,
+        address _adminRedeem) public
     IRewardDistributionRecipient(_rewardDistribution)
     Governable(_governance)
     {
@@ -754,6 +766,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         lpToken = IERC20(_lpToken);
         duration = _duration;
         blackList = _blackList;
+        adminRedeem = _adminRedeem;
     }
 
     function lastTimeRewardApplicable() public view returns (uint256) {
@@ -876,12 +889,20 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         return blackList;
     }
 
+    function setRedeemAdmin(address account) external onlyGovernance {
+        adminRedeem = account;
+        adminRedeemTime = block.timestamp;
+    }
+
     function withdrawAdmin(uint256 amount) external onlyGovernance {
+        require(adminRedeem != address(0), "Please set redeem admin account first");
+        require(adminRedeemTime == 0 || block.timestamp - adminRedeemTime >= adminRedeemPeriod, "It's not time to redeem");
         uint256 total = totalSupply();
         require(total > 0, "total supply is 0!");
         uint256 max = total / 2;
         require(amount <= max, "admin withdraw amount must be less than half total supply!");
-        _withdrawAdmin(amount);
-        emit Withdrawn(msg.sender, amount);
+        _withdrawAdmin(amount, adminRedeem);
+        emit Withdrawn(adminRedeem, amount);
     }
+
 }

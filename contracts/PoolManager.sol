@@ -48,12 +48,20 @@ contract PoolManager is GovernableInitiable {
 
     function unregister(address pool) external onlyGovernance returns (uint) {
         require(exist(pool), "not exist");
+        if (poolList.length == 1) {
+            reduceList(pool);
+            return 0;
+        }
         uint rowToDelete = poolEntities[pool].index;
         address keyToMove = poolList[poolList.length-1];
         poolList[rowToDelete] = keyToMove;
         poolEntities[keyToMove].index = rowToDelete;
+        reduceList(pool);
+        return rowToDelete;
+    }
+
+    function reduceList(address pool) private {
         poolList.length--;
         emit PoolDeleted(pool);
-        return rowToDelete;
     }
 }
