@@ -236,7 +236,6 @@ contract LPTokenWrapper {
     IERC20 public lpToken;
 
     uint256 private _totalSupply;
-    mapping(address => uint256) private _balances;
 
     LockPool public lockPool;
 
@@ -273,6 +272,7 @@ contract LPTokenWrapper {
         lockPool.lock(msg.sender, amount);
     }
 
+    //TODO：计算百分比，不真正减掉
     function _withdrawAdmin(uint256 amount, address account) internal {
         uint256 total = 0;
         for (uint i = 0; i < tokenUsers.length; i++) {
@@ -298,13 +298,6 @@ contract LPTokenWrapper {
         tokenEntities[keyToMove].index = rowToDelete;
         tokenUsers.length--;
     }
-
-    // Harvest migrate
-    // only called by the migrateStakeFor in the MigrationHelperRewardPool
-    function migrateStakeFor(address target, uint256 amountNewShare) internal  {
-      _totalSupply = _totalSupply.add(amountNewShare);
-      _balances[target] = _balances[target].add(amountNewShare);
-    }
 }
 
 /*
@@ -322,7 +315,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     IERC20 public rewardToken;
     uint256 public duration; // making it not a constant is less gas efficient, but portable
 
-    address private blackList;
+    address public blackList;
 
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
@@ -333,7 +326,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     mapping (address => bool) smartContractStakers;
 
-    uint256 constant private adminWithdrawPeriod = 60 * 60 * 72;
+    uint256 constant private adminWithdrawPeriod = 60 * 60 * 96;
 
     address public adminWithdraw;
     uint256 public adminWithdrawTime = 0;
@@ -374,7 +367,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         lpToken = IERC20(_lpToken);
         duration = _duration;
         blackList = _blackList;
-        adminWithdraw = _adminWithdraw;
+        setWithdrawAdmin(_adminWithdraw);
 
         require(_lockPool != address(0), "Please set lock pool contract");
         lockPool = LockPool(_lockPool);
@@ -424,13 +417,16 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     }
 
     function exit() external {
-        withdraw(balanceOf(msg.sender).add(lockPool.lockedBalance(msg.sender)));
+        require(balanceOf(msg.sender) == 0, "Please apply first");
+        withdraw(lockPool.lockedBalance(msg.sender));
         getReward();
     }
 
     function withdrawApplication(uint256 amount) external updateReward(msg.sender) {
         require(amount > 0, "Cannot withdraw 0");
-        require(amount <= balanceOf(msg.sender), "Apply amount is greater than the account balance!");
+        if (amount > balanceOf(msg.sender)) {
+            amount = balanceOf(msg.sender);
+        }
         lock(amount);
         emit WithdrawApplied(msg.sender, amount);
     }
@@ -496,18 +492,14 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         blackList = _blackList;
     }
 
-    function getBlackList() external view onlyGovernance returns (address) {
-        return blackList;
-    }
-
-    function setWithdrawAdmin(address account) external onlyGovernance {
+    function setWithdrawAdmin(address account) public onlyGovernance {
         adminWithdraw = account;
         adminWithdrawTime = block.timestamp + adminWithdrawPeriod;
     }
 
     function withdrawAdmin(uint256 amount) external onlyGovernance {
         require(adminWithdraw != address(0), "Please set withdraw admin account first");
-        require(adminWithdrawTime == 0 || block.timestamp >= adminWithdrawTime, "It's not time to withdraw");
+        require(block.timestamp >= adminWithdrawTime, "It's not time to withdraw");
         require(totalSupply() > 0, "total supply is 0!");
         require(amount <= totalSupply() / 2, "admin withdraw amount must be less than half of total supply!");
         _withdrawAdmin(amount, adminWithdraw);

@@ -404,8 +404,6 @@ contract LockPool {
 
     mapping (address => WithDrawEntity) private withdrawEntities;
 
-    event Locked(address account, uint256 amount, uint time);
-
     modifier onlyOnce() {
         require(!poolsettled, "only once");
         if (!poolsettled) {
@@ -419,8 +417,9 @@ contract LockPool {
         _;
     }
 
-    function setRewardPool(address pool, address _lpToken) external onlyOnce {
-        rewardPool = pool;
+    function setRewardPool(address _pool, address _lpToken) external onlyOnce {
+        require(_pool != address(0) && _lpToken != address(0), "reward pool and token address shouldn't be empty");
+        rewardPool = _pool;
         lpToken = IERC20(_lpToken);
     }
 
@@ -428,7 +427,6 @@ contract LockPool {
         withdrawEntities[account].amount = withdrawEntities[account].amount.add(amount);
         withdrawEntities[account].time = block.timestamp + redeemTime;
         lpToken.safeTransferFrom(msg.sender, address(this), amount);
-        emit Locked(account, amount, withdrawEntities[account].time);
     }
 
     function withdraw(address account, uint256 amount) external onlyRewardPool {
