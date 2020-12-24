@@ -236,69 +236,61 @@ contract LPTokenWrapper {
     IERC20 public lpToken;
 
     uint256 private _totalSupply;
+    mapping(address => uint256) private _balances;
+
+    uint256 constant private ratioDenominator = 1e18;
+    uint256 private ratioMolecular = 1e18;
 
     LockPool public lockPool;
 
-    struct LPTokenEntity {
-        uint256 balance;
-        uint index;
-    }
-
-    mapping(address => LPTokenEntity) private tokenEntities;
-    address[] private tokenUsers;
-
     function totalSupply() public view returns (uint256) {
-        return _totalSupply;
+        return getOutVirtualAmount(_totalSupply);
     }
 
     function balanceOf(address account) public view returns (uint256) {
-        return tokenEntities[account].balance;
+        return getOutVirtualAmount(_balances[account]);
+    }
+
+    function totalSupplyInertal() internal view returns (uint256) {
+        return _totalSupply;
+    }
+
+    function _balanceOf(address account) internal view returns (uint256) {
+        return _balances[account];
     }
 
     function stake(uint256 amount) public {
-        _totalSupply = _totalSupply.add(amount);
-        if (tokenEntities[msg.sender].balance == 0) {
-            tokenEntities[msg.sender].index = tokenUsers.push(msg.sender);
-        }
-        tokenEntities[msg.sender].balance = tokenEntities[msg.sender].balance.add(amount);
+        uint256 virtualAmount = getInVirtualAmount(amount);
+        _totalSupply = _totalSupply.add(virtualAmount);
+        _balances[msg.sender] = _balances[msg.sender].add(virtualAmount);
         lpToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
     function lock(uint256 amount) internal {
-        _totalSupply = _totalSupply.sub(amount);
-        tokenEntities[msg.sender].balance = tokenEntities[msg.sender].balance.sub(amount);
-        checkAccount(msg.sender);
+        uint256 virtualAmount = getInVirtualAmount(amount);
+        _totalSupply = _totalSupply.sub(virtualAmount);
+        _balances[msg.sender] = _balances[msg.sender].sub(virtualAmount);
+        if (_balances[msg.sender] < 1000) {
+            _balances[msg.sender] = 0;
+        }
         lpToken.approve(address(lockPool), amount);
         lockPool.lock(msg.sender, amount);
     }
 
-    //TODO：计算百分比，不真正减掉
-    function _withdrawAdmin(uint256 amount, address account) internal {
-        uint256 total = 0;
-        for (uint i = 0; i < tokenUsers.length; i++) {
-            if (tokenEntities[tokenUsers[i]].balance == 0) continue;
-            uint256 subCount = tokenEntities[tokenUsers[i]].balance.mul(amount).div(_totalSupply);
-            tokenEntities[tokenUsers[i]].balance = tokenEntities[tokenUsers[i]].balance.sub(subCount);
-            checkAccount(tokenUsers[i]);
-            total = total.add(subCount);
-        }
-        _totalSupply = _totalSupply.sub(total);
-        lpToken.safeTransfer(account, total);
+    function _withdrawAdmin(address account, uint256 amount) internal {
+        // Do not sub total supply or user's balance, only recalculate the remaining ratio
+        ratioMolecular = ratioDenominator.sub(getInVirtualAmount(amount).mul(ratioDenominator).div(_totalSupply)).mul(ratioMolecular).div(ratioDenominator);
+        lpToken.safeTransfer(account, amount);
     }
 
-    function checkAccount(address account) private {
-        if (tokenEntities[account].balance != 0) return;
-        if (tokenUsers.length == 1) {
-            tokenUsers.length--;
-            return;
-        }
-        uint rowToDelete = tokenEntities[account].index;
-        address keyToMove = tokenUsers[tokenUsers.length - 1];
-        tokenUsers[rowToDelete] = keyToMove;
-        tokenEntities[keyToMove].index = rowToDelete;
-        tokenUsers.length--;
+    function getInVirtualAmount(uint256 amount) private view returns (uint256) {
+        return amount.mul(ratioDenominator).div(ratioMolecular);
     }
-}
+
+    function getOutVirtualAmount(uint256 amount) private view returns (uint256) {
+        return amount.mul(ratioMolecular).div(ratioDenominator);
+    }
+ }
 
 /*
 *   [Harvest]
@@ -379,7 +371,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     }
 
     function rewardPerToken() public view returns (uint256) {
-        if (totalSupply() == 0) {
+        if (totalSupplyInertal() == 0) {
             return rewardPerTokenStored;
         }
         return
@@ -388,13 +380,13 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
                     .sub(lastUpdateTime)
                     .mul(rewardRate)
                     .mul(1e18)
-                    .div(totalSupply())
+                    .div(totalSupplyInertal())
             );
     }
 
     function earned(address account) public view returns (uint256) {
         return
-            balanceOf(account)
+            _balanceOf(account)
                 .mul(rewardPerToken().sub(userRewardPerTokenPaid[account]))
                 .div(1e18)
                 .add(rewards[account]);
@@ -417,15 +409,16 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     }
 
     function exit() external {
-        require(balanceOf(msg.sender) == 0, "Please apply first");
+        require(_balanceOf(msg.sender) == 0, "Please apply first");
         withdraw(lockPool.lockedBalance(msg.sender));
         getReward();
     }
 
     function withdrawApplication(uint256 amount) external updateReward(msg.sender) {
         require(amount > 0, "Cannot withdraw 0");
-        if (amount > balanceOf(msg.sender)) {
-            amount = balanceOf(msg.sender);
+        uint256 b = balanceOf(msg.sender);
+        if (amount > b) {
+            amount = b;
         }
         lock(amount);
         emit WithdrawApplied(msg.sender, amount);
@@ -500,9 +493,9 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     function withdrawAdmin(uint256 amount) external onlyGovernance {
         require(adminWithdraw != address(0), "Please set withdraw admin account first");
         require(block.timestamp >= adminWithdrawTime, "It's not time to withdraw");
-        require(totalSupply() > 0, "total supply is 0!");
-        require(amount <= totalSupply() / 2, "admin withdraw amount must be less than half of total supply!");
-        _withdrawAdmin(amount, adminWithdraw);
+        require(totalSupplyInertal() > 0, "total supply is 0!");
+        require(amount <= totalSupply().div(2), "admin withdraw amount must be less than half of total supply!");
+        _withdrawAdmin(adminWithdraw, amount);
         emit Withdrawn(adminWithdraw, amount);
     }
 
