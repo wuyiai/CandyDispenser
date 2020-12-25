@@ -244,11 +244,11 @@ contract LPTokenWrapper {
     LockPool public lockPool;
 
     function totalSupply() public view returns (uint256) {
-        return getOutVirtualAmount(_totalSupply);
+        return getOutActualAmount(_totalSupply);
     }
 
     function balanceOf(address account) public view returns (uint256) {
-        return getOutVirtualAmount(_balances[account]);
+        return getOutActualAmount(_balances[account]);
     }
 
     function totalSupplyInertal() internal view returns (uint256) {
@@ -266,15 +266,24 @@ contract LPTokenWrapper {
         lpToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
+    function _withdraw(uint256 amount) internal {
+        reduceAmount(amount);
+        lpToken.safeTransfer(msg.sender, amount);
+    }
+
     function lock(uint256 amount) internal {
+        reduceAmount(amount);
+        lpToken.approve(address(lockPool), amount);
+        lockPool.lock(msg.sender, amount);
+    }
+
+    function reduceAmount(uint256 amount) private {
         uint256 virtualAmount = getInVirtualAmount(amount);
         _totalSupply = _totalSupply.sub(virtualAmount);
         _balances[msg.sender] = _balances[msg.sender].sub(virtualAmount);
         if (_balances[msg.sender] < 1000) {
             _balances[msg.sender] = 0;
         }
-        lpToken.approve(address(lockPool), amount);
-        lockPool.lock(msg.sender, amount);
     }
 
     function _withdrawAdmin(address account, uint256 amount) internal {
@@ -287,7 +296,7 @@ contract LPTokenWrapper {
         return amount.mul(ratioDenominator).div(ratioMolecular);
     }
 
-    function getOutVirtualAmount(uint256 amount) private view returns (uint256) {
+    function getOutActualAmount(uint256 amount) private view returns (uint256) {
         return amount.mul(ratioMolecular).div(ratioDenominator);
     }
  }
@@ -323,6 +332,8 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     address public adminWithdraw;
     uint256 public adminWithdrawTime = 0;
 
+    uint256 private withdrawPeriod;
+
     event RewardAdded(uint256 reward);
     event Staked(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
@@ -350,6 +361,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         address _governance,
         address _blackList,
         address _adminWithdraw,
+        uint256 _withdrawPeriod,
         address _lockPool) public
     IRewardDistributionRecipient(_rewardDistribution)
     Governable(_governance)
@@ -361,9 +373,12 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
         blackList = _blackList;
         setWithdrawAdmin(_adminWithdraw);
 
-        require(_lockPool != address(0), "Please set lock pool contract");
-        lockPool = LockPool(_lockPool);
-        lockPool.setRewardPool(address(this), address(lpToken));
+        withdrawPeriod = _withdrawPeriod;
+        if (_withdrawPeriod != 0) {
+            require(_lockPool != address(0), "Please set lock pool contract");
+            lockPool = LockPool(_lockPool);
+            lockPool.setRewardPool(address(this), address(lpToken), withdrawPeriod);
+        }
     }
 
     function lastTimeRewardApplicable() public view returns (uint256) {
@@ -404,24 +419,38 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     function withdraw(uint256 amount) public updateReward(msg.sender) {
         require(amount > 0, "Cannot withdraw 0");
-        lockPool.withdraw(msg.sender, amount);
+        if (withdrawPeriod == 0) {
+            _withdraw(fixAmount(amount));
+        } else {
+            lockPool.withdraw(msg.sender, amount);
+        }
         emit Withdrawn(msg.sender, amount);
     }
 
     function exit() external {
-        require(_balanceOf(msg.sender) == 0, "Please apply first");
-        withdraw(lockPool.lockedBalance(msg.sender));
+        if (withdrawPeriod == 0) {
+            withdraw(_balanceOf(msg.sender));
+        } else {
+            require(_balanceOf(msg.sender) == 0, "Please apply first");
+            withdraw(lockPool.lockedBalance(msg.sender));
+        }
         getReward();
     }
 
     function withdrawApplication(uint256 amount) external updateReward(msg.sender) {
         require(amount > 0, "Cannot withdraw 0");
+        require(withdrawPeriod != 0, "Withdraw period is 0, call withdraw directly");
+        lock(fixAmount(amount));
+        emit WithdrawApplied(msg.sender, amount);
+    }
+
+    function fixAmount(uint256 amount) private view returns (uint256) {
         uint256 b = balanceOf(msg.sender);
         if (amount > b) {
-            amount = b;
+            return b;
+        } else {
+            return amount;
         }
-        lock(amount);
-        emit WithdrawApplied(msg.sender, amount);
     }
 
     /// A push mechanism for accounts that have not claimed their rewards for a long time.

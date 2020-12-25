@@ -392,7 +392,7 @@ contract LockPool {
     using SafeERC20 for IERC20;
 
     IERC20 public lpToken;
-    uint constant private redeemTime = 60 * 60 * 72;
+    uint256 private withdrawPeroid = 60 * 60 * 72;
     address public rewardPool;
 
     bool private poolsettled = false;
@@ -417,15 +417,16 @@ contract LockPool {
         _;
     }
 
-    function setRewardPool(address _pool, address _lpToken) external onlyOnce {
+    function setRewardPool(address _pool, address _lpToken, uint256 _withdrawPeroid) external onlyOnce {
         require(_pool != address(0) && _lpToken != address(0), "reward pool and token address shouldn't be empty");
         rewardPool = _pool;
         lpToken = IERC20(_lpToken);
+        withdrawPeroid = _withdrawPeroid;
     }
 
     function lock(address account, uint256 amount) external onlyRewardPool {
         withdrawEntities[account].amount = withdrawEntities[account].amount.add(amount);
-        withdrawEntities[account].time = block.timestamp + redeemTime;
+        withdrawEntities[account].time = block.timestamp + withdrawPeroid;
         lpToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
