@@ -332,7 +332,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
     address public adminWithdraw;
     uint256 public adminWithdrawTime = 0;
 
-    uint256 private withdrawPeriod;
+    uint256 public withdrawPeriod;
 
     event RewardAdded(uint256 reward);
     event Staked(address indexed user, uint256 amount);
@@ -446,11 +446,8 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     function fixAmount(uint256 amount) private view returns (uint256) {
         uint256 b = balanceOf(msg.sender);
-        if (amount > b) {
-            return b;
-        } else {
-            return amount;
-        }
+        require(b > 0, "balance is 0");
+        return amount > b ? b : amount;
     }
 
     /// A push mechanism for accounts that have not claimed their rewards for a long time.

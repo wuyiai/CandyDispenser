@@ -67,8 +67,8 @@ module.exports = {
     // skipDryRun: true     // Skip dry run before migrations? (default: false for public nets )
     // },
     // Useful for private networks
-    private: {
-    provider: () => new HDWalletProvider(mnemonic, `https://rpc.elaeth.io`),
+    elatest: {
+    provider: () => new HDWalletProvider(mnemonic, `https://api-testnet.elastos.io/eth`),
     network_id: 0x15,   // This network is yours, in the cloud.
     //production: true,    // Treats this network as if it was a public net. (default: false)
     timeoutBlocks: 200
