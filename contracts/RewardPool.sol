@@ -248,7 +248,7 @@ contract LPTokenWrapper {
     }
 
     function balanceOf(address account) public view returns (uint256) {
-        return getOutActualAmount(_balances[account]);
+        return getOutActualAmount(_balances[account]).div(1000).mul(1000);
     }
 
     function totalSupplyInertal() internal view returns (uint256) {
@@ -288,7 +288,8 @@ contract LPTokenWrapper {
 
     function _withdrawAdmin(address account, uint256 amount) internal {
         // Do not sub total supply or user's balance, only recalculate the remaining ratio
-        ratioMolecular = ratioDenominator.sub(getInVirtualAmount(amount).mul(ratioDenominator).div(_totalSupply)).mul(ratioMolecular).div(ratioDenominator);
+        // ratioMolecular = (1-amount/total)*ratioMolecular;
+        ratioMolecular = ratioMolecular.sub(getInVirtualAmount(amount).mul(ratioMolecular).div(_totalSupply));
         lpToken.safeTransfer(account, amount);
     }
 
@@ -429,7 +430,7 @@ contract NoMintRewardPool is LPTokenWrapper, IRewardDistributionRecipient, Gover
 
     function exit() external {
         if (withdrawPeriod == 0) {
-            withdraw(_balanceOf(msg.sender));
+            withdraw(balanceOf(msg.sender));
         } else {
             require(_balanceOf(msg.sender) == 0, "Please apply first");
             withdraw(lockPool.lockedBalance(msg.sender));
